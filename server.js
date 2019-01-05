@@ -1,109 +1,124 @@
-const express = require('express');
-const bodyParser = require('body-parser');
-const cors=require('cors');
-const knex=require('knex');
+const express = require("express");
+const bodyParser = require("body-parser");
+const cors = require("cors");
+const knex = require("knex");
+const bcrypt = require("bcrypt-nodejs");
 
-const postgres=knex({
-  client:'pg',
-  connection:{
-    host:'127.0.0.1',
-    user: 'postgres',
-    password:'',
-    database:'smart-brain'
+const db = knex({
+  client: "pg",
+  connection: {
+    host: "127.0.0.1",
+    user: "postgres",
+    password: "test",
+    database: "smart-brain"
   }
 });
 
-postgres.select('*').from('users');
-
 const app = express();
 
-app.use(bodyParser.urlencoded({
-  extended: false
-}));
+app.use(
+  bodyParser.urlencoded({
+    extended: false
+  })
+);
 app.use(bodyParser.json());
 app.use(cors());
 
-const database = {
-  users: [{
-      id: '123',
-      name: 'John',
-      email: 'john@gmail.com',
-      password: 'cookies',
-      entries: 0,
-      joined: new Date()
-    },
-    {
-      id: '124',
-      name: 'Sally',
-      email: 'sally@gmail.com',
-      password: 'bannaas',
-      entries: 0,
-      joined: new Date()
-    }
-  ]
-}
 
-app.get('/', (req, res) => {
+app.get("/", (req, res) => {
   res.send(database.users);
-})
+});
 
-app.post('/signin', (req, res) => {
-  let email = req.body.email;
-  let password = req.body.password;
-  if (email === database.users[0].email && password === database.users[0].password) {
-    res.json(database.users[0]);
-  } else {
-    res.status(400).json('Error loggin in');
-  }
-})
+app.post("/signin", (req, res) => {
+  db.select('email', 'hash').from('login')
+    .where('email', '=', req.body.email)
+    .then(data => {
+      const isValid = bcrypt.compareSync(req.body.password, data[0].hash)
+      if (isValid) {
+        return db.select('*').from('users')
+          .where('email', '=', req.body.email)
+          .then(user => {
+            res.json(user[0])
+          })
+          .catch(err => res.status(400).json('Unable to get user'))
+      } else {
+        res.status(400).json('Wrong Credentials');
+      }
+    })
+    .catch(err => res.status(400).json('Wrong Credentials'))
+});
 
-app.post('/register', (req, res) => {
-
+app.post("/register", (req, res) => {
   const {
     email,
     name,
     password
   } = req.body;
-  database.users.push({
-    id: '125',
-    name: name,
-    email: email,
-    password: password,
-    entries: 0,
-    joined: new Date()
-  })
-  res.json(database.users[database.users.length - 1])
+  const hash = bcrypt.hashSync(password);
+  db.transaction(trx => {
+      trx.insert({
+          hash: hash,
+          email: email
+        })
+        .into('login')
+        .returning('email')
+        .then(loginEmail => {
+          return trx('users')
+            .returning('*')
+            .insert({
+              email: loginEmail[0],
+              name: name,
+              joined: new Date()
+            })
+            .then(user => {
+              res.json(user[0])
+            })
+        })
+        .then(trx.commit)
+        .catch(trx.rollback)
+    })
+    .catch(err => res.status(400).json('unable to register'))
+});
 
-})
-
-app.get('/profile/:id', (req, res) => {
+app.get("/profile/:id", (req, res) => {
   const {
     id
   } = req.params;
-  database.users.forEach(user => {
-    if (user.id === id) {
-      return res.json(user);
-    }
-  })
-  return res.status(404).json("No such user");
-})
+  db.select("*")
+    .from("users")
+    .where({
+      id: id
+    })
+    .then(user => {
+      if (user.length) {
+        res.json(user[0]);
+      } else {
+        res.status(400).json("Not found");
+      }
+    })
+    .catch(err => res.status(400).json("error getting user"));
+});
 
-app.put('/image', (req, res) => {
+app.put("/image", (req, res) => {
   const {
     id
   } = req.body;
-  database.users.forEach(user => {
-    if (user.id === id) {
-      user.entries++;
-      return res.json(user.entries);
-    }
-  })
-  return res.status(400).json('not found')
-})
+  console.log(id);
+  db("users")
+    .where("id", "=", id)
+    .increment("entries", 1)
+    .returning("entries")
+    .then(entries => {
+      res.json(entries[0]);
+    })
+    .catch(err => {
+      res.status(400).json("unable to set entries");
+    });
+});
 
 app.listen(3000, () => {
-  console.log("Server started on http://localhost:3000")
-})
+  console.log("Server started on http://localhost:3000");
+});
 
 /*
 Api Config
